@@ -55,7 +55,7 @@ async def _fetch_all(users):
 
 
 def letterboxd_to_link(url):
-    video_source = "https://vidsrc.cc/v2/embed/movie/"
+    video_source = r"https://vidsrc.cc/v2/embed/movie/"
 
     response = requests.get(url)
 
@@ -80,6 +80,8 @@ def letterboxd_to_link(url):
                 raise ValueError
 
             return link
+
+    return None
 
 
 def _get_review_and_metadata(entry):

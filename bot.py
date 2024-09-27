@@ -60,7 +60,8 @@ async def letterboxd_link_handler(event):
                     if match := re.search(pattern, url):
                         try:
                             url = "https://" + match.group(1)
-                            await event.respond(letterboxd.letterboxd_to_link(url))
+                            if link := letterboxd.letterboxd_to_link(url):
+                                await event.respond(link)
                         except ValueError:
                             await event.respond(
                                 "404: Фільму немає на сервері vidsrc.cc."
@@ -109,7 +110,7 @@ async def main(users=settings.users, age_minutes=args.age, debug=args.debug):
             )
 
         end_time = datetime.now()
-        print(f"{end_time.strftime('%H:%M%:%S')} — {(end_time - start_time)}s")
+        print(f"{end_time.strftime('%H:%M:%S')} — {(end_time - start_time)}s")
 
         await asyncio.sleep(age_minutes * 60)
 
