@@ -1,0 +1,28 @@
+name: Deploy to VPS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the code
+      uses: actions/checkout@v4
+
+    - name: Set up SSH for deployment
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: ${{secrets.SSH_PRIVATE_KEY}}
+
+    - name: Deploy code to VPS
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{secrets.VPS_USER}}@{{secrets.VPS_IP}} << 'EOF'
+          screen -S bot -X quit
+          git pull origin main
+          cd letterboxd-bot
+          screen -dmS bot bash -c 'source venv/bin/activate && python bot.py'
+        EOF
