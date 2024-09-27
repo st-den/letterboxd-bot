@@ -10,5 +10,5 @@ $ nano users.txt
 $ python -m venv bot
 $ source bot/bin/activate
 $ pip install -r requirements.txt
-$ screen -dmS bot bash -c 'source venv/bin/activate && python bot.py'
+$ screen -dmS bot bash -c 'source venv/bin/activate && python bot.py --age=60 --debug=False'
 ```
