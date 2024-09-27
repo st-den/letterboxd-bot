@@ -1,3 +1,5 @@
+# Taken from https://gist.github.com/YouKnow-sys/3d571bdd4857f175d91db8146ec065bf
+
 """
 Simple HTML -> Telegram entity parser.
 """
