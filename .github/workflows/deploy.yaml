@@ -22,7 +22,7 @@ jobs:
       run: |
         ssh -o StrictHostKeyChecking=no ${{secrets.VPS_USER}}@${{secrets.VPS_IP}} << 'EOF'
           screen -S bot -X quit
-          git pull origin main
           cd letterboxd-bot
+          git pull origin main
           screen -dmS bot bash -c 'source venv/bin/activate && python bot.py'
         EOF
