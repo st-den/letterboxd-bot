@@ -87,7 +87,8 @@ async def _fetch_all(users):
 
 
 def letterboxd_to_link(url):
-    if requests.get(url).status_code == 200:
+    letterboxd_response = requests.get(url)
+    if letterboxd_response.status_code == 200:
         return (
             r"https://vidsrc.cc/v2/embed/movie/"
             + (
