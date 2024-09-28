@@ -5,6 +5,7 @@ from random import shuffle
 import aiohttp
 import requests
 from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
 
 RATING_TO_STARS = {
     "0.5": "½★",
@@ -71,7 +72,7 @@ def letterboxd_to_link(url):
 
         vidsrc_response = requests.get(
             link,
-            headers={"User-Agent": ""},
+            headers={"User-Agent": UserAgent().random},
         )
 
         if vidsrc_response.status_code == 200:
