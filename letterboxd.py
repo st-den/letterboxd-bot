@@ -5,7 +5,8 @@ from random import shuffle
 import aiohttp
 import requests
 from bs4 import BeautifulSoup
-from fake_useragent import UserAgent
+
+# from fake_useragent import UserAgent
 
 RATING_TO_STARS = {
     "0.5": "½★",
@@ -55,13 +56,40 @@ async def _fetch_all(users):
     return responses
 
 
-def letterboxd_to_link(url):
-    letterboxd_response = requests.get(url)
+# def letterboxd_to_link(url):
+#     letterboxd_response = requests.get(url)
 
-    if letterboxd_response.status_code == 200:
-        video_source = r"https://vidsrc.cc/v2/embed/movie/"
-        link = (
-            video_source
+#     if letterboxd_response.status_code == 200:
+#         video_source = r"https://vidsrc.cc/v2/embed/movie/"
+#         link = (
+#             video_source
+#             + (
+#                 BeautifulSoup(letterboxd_response.text, features="html.parser")
+#                 .find("p", {"class": "text-link text-footer"})
+#                 .find_all("a")[1]["href"]
+#                 .split("/")[-2]
+#             )
+#         )
+
+#         vidsrc_response = requests.get(
+#             link,
+#             headers={"User-Agent": UserAgent().random},
+#         )
+
+#         if vidsrc_response.status_code == 200:
+#             soup = BeautifulSoup(vidsrc_response.text, features="html.parser")
+#             if soup.find("div", {"class": "not-found"}):
+#                 raise ValueError
+
+#             return link
+
+#     return None
+
+
+def letterboxd_to_link(url):
+    if requests.get(url).status_code == 200:
+        return (
+            r"https://vidsrc.cc/v2/embed/movie/"
             + (
                 BeautifulSoup(letterboxd_response.text, features="html.parser")
                 .find("p", {"class": "text-link text-footer"})
@@ -69,20 +97,6 @@ def letterboxd_to_link(url):
                 .split("/")[-2]
             )
         )
-
-        vidsrc_response = requests.get(
-            link,
-            headers={"User-Agent": UserAgent().random},
-        )
-
-        if vidsrc_response.status_code == 200:
-            soup = BeautifulSoup(vidsrc_response.text, features="html.parser")
-            if soup.find("div", {"class": "not-found"}):
-                raise ValueError
-
-            return link
-
-    return None
 
 
 def _get_review_and_metadata(entry):
