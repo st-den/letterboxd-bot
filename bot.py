@@ -52,22 +52,21 @@ args = parser.parse_args()
 @client.on(events.NewMessage())
 async def letterboxd_link_handler(event):
     pattern = re.compile(r"^(?:https?:\/\/)?(?:www\.)?(boxd\.it.*|letterboxd\.com.*)")
-    if event.message.entities:
-        if event.is_group and event.mentioned or event.message.is_private:
-            for entity in event.message.entities:
-                if isinstance(entity, MessageEntityUrl):
-                    url = event.raw_text[entity.offset : entity.offset + entity.length]
-                    if match := re.search(pattern, url):
-                        try:
-                            url = "https://" + match.group(1)
-                            if link := letterboxd.letterboxd_to_link(url):
-                                await event.respond(link)
-                        except ValueError:
-                            await event.respond(
-                                "404: Фільму немає на сервері vidsrc.cc."
-                            )
-                        except AttributeError:
-                            print("Неправильне посилання.")
+    if event.message.entities and (
+        event.is_group and event.mentioned or event.message.is_private
+    ):
+        for entity in event.message.entities:
+            if isinstance(entity, MessageEntityUrl):
+                url = event.raw_text[entity.offset : entity.offset + entity.length]
+                if match := re.search(pattern, url):
+                    try:
+                        url = f"https://{match[1]}"
+                        if link := letterboxd.letterboxd_to_link(url):
+                            await event.respond(link)
+                    except ValueError:
+                        await event.respond("404: Фільму немає на сервері vidsrc.cc.")
+                    except AttributeError:
+                        print("Неправильне посилання.")
 
 
 @client.on(events.NewMessage(pattern=r"^>add (\w+)"))

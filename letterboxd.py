@@ -55,27 +55,27 @@ async def _fetch_all(users):
 
 
 def letterboxd_to_link(url):
-    video_source = r"https://vidsrc.cc/v2/embed/movie/"
+    letterboxd_response = requests.get(url)
 
-    response = requests.get(url)
-
-    if response.status_code == 200:
+    if letterboxd_response.status_code == 200:
+        video_source = r"https://vidsrc.cc/v2/embed/movie/"
         link = (
             video_source
             + (
-                BeautifulSoup(response.text, features="html.parser")
+                BeautifulSoup(letterboxd_response.text, features="html.parser")
                 .find("p", {"class": "text-link text-footer"})
                 .find_all("a")[1]["href"]
                 .split("/")[-2]
             )
         )
-        response = requests.get(
+
+        vidsrc_response = requests.get(
             link,
             headers={"User-Agent": ""},
         )
 
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, features="html.parser")
+        if vidsrc_response.status_code == 200:
+            soup = BeautifulSoup(vidsrc_response.text, features="html.parser")
             if soup.find("div", {"class": "not-found"}):
                 raise ValueError
 
@@ -149,11 +149,7 @@ def _format_movie(entry):
         *RATING_TO_EMOJI[rating.text if rating else ""]
     )
 
-    if stars:
-        prefix = " ".join([emoji, stars])
-    else:
-        prefix = emoji
-
+    prefix = " ".join([emoji, stars]) if stars else emoji
     review = _format_review(entry)
     if review:
         review = f"\n<blockquote expandable>{review}<blockquote expandable/>"
@@ -171,9 +167,7 @@ def _format_user(entries):
 
     text = [f'<b>Оновлення від <a href="{link}">{name}</a>:</b>']
 
-    for entry in entries:
-        text.append(_format_movie(entry))
-
+    text.extend(_format_movie(entry) for entry in entries)
     return "\n".join(text)
 
 
