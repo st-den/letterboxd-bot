@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime
 from random import shuffle
 
@@ -87,17 +88,29 @@ async def _fetch_all(users):
 
 
 def letterboxd_to_link(url):
-    letterboxd_response = requests.get(url)
-    if letterboxd_response.status_code == 200:
-        return (
-            r"https://vidsrc.cc/v2/embed/movie/"
-            + (
-                BeautifulSoup(letterboxd_response.text, features="html.parser")
-                .find("p", {"class": "text-link text-footer"})
-                .find_all("a")[1]["href"]
-                .split("/")[-2]
+    letterboxd_or_boxd = requests.get(url)
+    if letterboxd_or_boxd.status_code == 200:
+        movie_or_log = re.compile(r"(https\:\/\/letterboxd\.com\/).*(film\/.+\/?)")
+        url = BeautifulSoup(letterboxd_or_boxd.text, features="html.parser").find(
+            "meta", property="og:url"
+        )["content"]
+
+        if match := re.search(movie_or_log, url):
+            movie_response = requests.get(f"{match[1]}{match[2]}")
+            return (
+                r"https://vidsrc.cc/v2/embed/movie/"
+                + (
+                    BeautifulSoup(movie_response.text, features="html.parser")
+                    .find("p", {"class": "text-link text-footer"})
+                    .find_all("a")[1]["href"]
+                    .split("/")[-2]
+                )
             )
-        )
+
+
+def _get_liked_state(movie_link):
+    log = BeautifulSoup(requests.get(movie_link).text, features="html.parser")
+    return bool(log.find("span", {"class": "icon-liked"}))
 
 
 def _get_review_and_metadata(entry):
@@ -165,14 +178,15 @@ def _format_movie(entry):
         *RATING_TO_EMOJI[rating.text if rating else ""]
     )
 
-    prefix = " ".join([emoji, stars]) if stars else emoji
-    review = _format_review(entry)
-    if review:
+    if review := _format_review(entry):
         review = f"\n<blockquote expandable>{review}<blockquote expandable/>"
-        link = entry.find("link").text
-    else:
-        tmdb_id = entry.find("tmdb:movieId") or entry.find("tmdb:tvId")
-        link = f"https://letterboxd.com/tmdb/{tmdb_id.text}"
+
+    link = entry.find("link").text
+    heart = "❤️" if _get_liked_state(link) else ""
+    prefix = " ".join([heart, emoji, stars]) if stars else emoji
+
+    # tmdb_id = entry.find("tmdb:movieId") or entry.find("tmdb:tvId")
+    # link = f"https://letterboxd.com/tmdb/{tmdb_id.text}"
 
     return f'{prefix} <a href="{link}"><i>{movie}{year}</i></a>{review}'
 
@@ -194,14 +208,8 @@ def _is_entry_new(entry_time_str, cutoff_time):
 
 
 def _filter_new_movies(rss, cutoff_time):
-    movies = []
-
-    soup = BeautifulSoup(rss, features="xml")
-    entries = soup.find_all("item")
-    if len(entries) > 0:
-        # w is movie, l is list
-        movies = [e for e in entries if "w" in e.guid.text]
-
+    entries = BeautifulSoup(rss, features="xml").find_all("item")
+    movies = [e for e in entries if "w" in e.guid.text] if len(entries) > 0 else []
     return [
         movie
         for movie in movies

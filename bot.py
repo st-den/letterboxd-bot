@@ -59,12 +59,10 @@ async def letterboxd_link_handler(event):
             if isinstance(entity, MessageEntityUrl):
                 url = event.raw_text[entity.offset : entity.offset + entity.length]
                 if match := re.search(pattern, url):
+                    url = f"https://{match[1]}"
                     try:
-                        url = f"https://{match[1]}"
                         if link := letterboxd.letterboxd_to_link(url):
-                            await event.respond(link)
-                    except ValueError:
-                        await event.respond("404: Фільму немає на сервері vidsrc.cc.")
+                            await event.reply(link)
                     except AttributeError:
                         print("Неправильне посилання.")
 
@@ -89,8 +87,13 @@ async def age_handler(event):
         try:
             await current_task
         except asyncio.CancelledError:
-            pass
+            print(f"Restarting main() with age_minutes={age}")
     current_task = client.loop.create_task(main(age_minutes=age))
+
+
+@client.on(events.NewMessage(pattern=r"^ping$"))
+async def ping_handler(event):
+    event.reply("pong")
 
 
 async def main(users=settings.users, age_minutes=args.age, debug=args.debug):
