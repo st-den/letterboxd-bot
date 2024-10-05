@@ -90,6 +90,3 @@ def create_low_rating_meme(name, poster):
 def _clean_name(name):
     name = re.sub(r"(?<=\S)([^\w\s])", r" \1", name)
     return re.sub(r"([^\w\s])(?=\S)", r"\1 ", name)
-
-
-create_low_rating_meme("Liza", "cover.jpg")
