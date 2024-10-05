@@ -1,7 +1,7 @@
 import asyncio
 import re
 from argparse import ArgumentParser
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from telethon import TelegramClient, events
 
@@ -13,15 +13,19 @@ import letterboxd
 import settings
 from custom_html_parser import CustomHtmlParser
 
+LETTERBOXD_OR_BOXD = re.compile(
+    r"^(?:https?:\/\/)?(?:www\.)?(boxd\.it.*|letterboxd\.com.*)"
+)
+
 current_task = None
 
 client = TelegramClient(
-    settings.session,
+    settings.session,  # type: ignore
     settings.api_id,
-    settings.api_hash,
+    settings.api_hash,  # type: ignore
 )
-client.start(phone=settings.phone_number)
-client.parse_mode = CustomHtmlParser()
+client.start(phone=settings.phone_number)  # type: ignore
+client.parse_mode = CustomHtmlParser()  # type: ignore
 
 parser = ArgumentParser()
 parser.add_argument(
@@ -50,15 +54,14 @@ args = parser.parse_args()
 
 
 @client.on(events.NewMessage())
-async def letterboxd_link_handler(event):
-    pattern = re.compile(r"^(?:https?:\/\/)?(?:www\.)?(boxd\.it.*|letterboxd\.com.*)")
+async def letterboxd_link_handler(event):  # sourcery skip: last-if-guard
     if event.message.entities and (
         event.is_group and event.mentioned or event.message.is_private
     ):
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityUrl):
                 url = event.raw_text[entity.offset : entity.offset + entity.length]
-                if match := re.search(pattern, url):
+                if match := re.search(LETTERBOXD_OR_BOXD, url):
                     url = f"https://{match[1]}"
                     try:
                         if link := letterboxd.letterboxd_to_link(url):
@@ -80,15 +83,16 @@ async def remove_user_handler(event):
 @client.on(events.NewMessage(pattern=r"^>age (\d+)"))
 async def age_handler(event):
     global current_task
-    age = int(event.pattern_match.group(1))
+    new_age = int(event.pattern_match.group(1))
 
     if current_task:
         current_task.cancel()
         try:
             await current_task
         except asyncio.CancelledError:
-            print(f"Restarting main() with age_minutes={age}")
-    current_task = client.loop.create_task(main(age_minutes=age))
+            print(f"Restarting main() with age_minutes={new_age}")
+
+    current_task = client.loop.create_task(main(age_minutes=new_age))
 
 
 @client.on(events.NewMessage(pattern=r"^ping$"))
@@ -96,23 +100,41 @@ async def ping_handler(event):
     event.reply("pong")
 
 
-async def main(users=settings.users, age_minutes=args.age, debug=args.debug):
+async def main(
+    users: list[str] = settings.users,
+    age_minutes: int = args.age,
+    debug: bool = args.debug,
+):
     chat = PeerChannel(settings.chat_id)
     bot = await client.get_me()
 
     while True:
         start_time = datetime.now()
-        cutoff_time = start_time.astimezone() - timedelta(minutes=age_minutes)
 
-        if updates := await letterboxd.fetch_movie_updates(users, cutoff_time):
-            await client.send_message(
-                bot if debug else chat,
-                updates,
-                link_preview=False,
-            )
+        manager = letterboxd.RssUpdatesManager(age_minutes)
+        updates = await manager.fetch_updates_from_users(users)
+
+        if updates:
+            uploads = [
+                client.upload_file(picture)
+                for picture in await letterboxd.create_memes(updates)
+            ]
+            if uploads:
+                await client.send_message(
+                    bot if debug else chat,
+                    await manager.format_updates(updates),
+                    file=await asyncio.gather(*uploads),
+                    link_preview=False,
+                )
+            else:
+                await client.send_message(
+                    bot if debug else chat,
+                    await manager.format_updates(updates),
+                    link_preview=False,
+                )
 
         end_time = datetime.now()
-        print(f"{end_time.strftime('%H:%M:%S')} — {(end_time - start_time)}s")
+        print(f"{end_time.strftime('%H:%M:%S')} — {(end_time - start_time).seconds}s")
 
         await asyncio.sleep(age_minutes * 60)
 

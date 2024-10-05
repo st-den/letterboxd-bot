@@ -5,6 +5,7 @@ include
 lib
 *.session
 *.env
+*.txt
 pyvenv.cfg
 test.py
-users.txt
+cover.jpg

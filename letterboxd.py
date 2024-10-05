@@ -1,229 +1,398 @@
 import asyncio
+import io
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from random import shuffle
+from typing import Self
 
 import aiohttp
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, PageElement
+
+import memes
 
 # from fake_useragent import UserAgent
 
-RATING_TO_STARS = {
-    "0.5": "½★",
-    "1.0": "★",
-    "1.5": "★½",
-    "2.0": "★★",
-    "2.5": "★★½",
-    "3.0": "★★★",
-    "3.5": "★★★½",
-    "4.0": "★★★★",
-    "4.5": "★★★★½",
-    "5.0": "★★★★★",
-}
 
-RATING_TO_EMOJI = {
-    "": (5433986691549387917, "😋"),
-    "0.5": (5436167151956284338, "🖕"),
-    "1.0": (5434146580296913175, "🤓"),
-    "1.5": (5433905855969906170, "😁"),
-    "2.0": (5435946807249099970, "🚬"),
-    "2.5": (5434010992474349724, "😐"),
-    "3.0": (5435893352086136461, "🐱"),
-    "3.5": (5435908904162713385, "🎧"),
-    "4.0": (5435881665480119374, "😳"),
-    "4.5": (5436196100035862776, "😭"),
-    "5.0": (5435974213435415251, "🤯"),
-}
+_MOVIE_OR_LOG = re.compile(r"(https\:\/\/letterboxd\.com\/).*(film\/.+\/?)")
 
 
-async def _make_request(session, url):
-    try:
-        async with session.get(url) as response:
-            return await response.read()
-    except Exception as e:
-        return str(e)
+class MovieLog:
+    """
+    Attributes
+    ----------
+    link : str
+    title : str
+    is_liked : bool
+    is_rewatch : bool
+    year: str | None
+    rating : str | None
+    review : str | None
+    poster_url: str | None
+    """
+
+    _RATING_TO_STARS = {
+        "0.5": "½★",
+        "1.0": "★",
+        "1.5": "★½",
+        "2.0": "★★",
+        "2.5": "★★½",
+        "3.0": "★★★",
+        "3.5": "★★★½",
+        "4.0": "★★★★",
+        "4.5": "★★★★½",
+        "5.0": "★★★★★",
+    }
+
+    _RATING_TO_TELEMOJI = {
+        None: (5433986691549387917, "😋"),
+        "0.5": (5436167151956284338, "🖕"),
+        "1.0": (5434146580296913175, "🤓"),
+        "1.5": (5433905855969906170, "😁"),
+        "2.0": (5435946807249099970, "🚬"),
+        "2.5": (5434010992474349724, "😐"),
+        "3.0": (5435893352086136461, "🐱"),
+        "3.5": (5435908904162713385, "🎧"),
+        "4.0": (5435881665480119374, "😳"),
+        "4.5": (5436196100035862776, "😭"),
+        "5.0": (5435974213435415251, "🤯"),
+    }
+
+    _REWATCHED = re.compile(r"\/\d+\/$")
+
+    def __init__(self, entry: PageElement) -> None:
+        self._entry = entry
+        self._parse_review()
+
+    def __await__(self):
+        return self._parse_metadata().__await__()
+
+    async def format(self) -> str:
+        year = f" ({self.year})" if self.year else ""
+        rewatch = "🔄" if self.is_rewatch else ""
+        heart = "❤️" if self.is_liked else ""
+        stars = self._RATING_TO_STARS[self.rating] if self.rating else ""
+        emoji = '<tg-emoji emoji-id="{}">{}</tg-emoji>'.format(
+            *self._RATING_TO_TELEMOJI[self.rating]
+        )
+
+        prefix_components = (
+            [rewatch, heart, emoji, stars] if stars else [rewatch, heart, emoji]
+        )
+        prefix = " ".join(filter(bool, prefix_components))
+
+        review = self._format_review(self._unformatted_review, self.has_spoilers)
+        if review:
+            review = f"\n<blockquote expandable>{review}<blockquote expandable/>"
+        else:
+            review = ""
+
+        # tmdb_id = entry.find("tmdb:movieId") or entry.find("tmdb:tvId")
+        # self.link = f"https://letterboxd.com/tmdb/{tmdb_id.text}"
+
+        return f'{prefix} <a href="{self.link}"><i>{self.title}{year}</i></a>{review}'
+
+    async def _parse_metadata(self) -> Self:
+        self.link = self._entry.find("link").text  # type: ignore
+        await self._get_is_liked()
+
+        self.title = self._entry.find("letterboxd:filmTitle").text  # type: ignore
+        self.year = (
+            year.text if (year := self._entry.find("letterboxd:filmYear")) else None  # type: ignore
+        )
+        self.rating = (
+            rating.text
+            if (rating := self._entry.find("letterboxd:memberRating"))  # type: ignore
+            else None
+        )
+        self.is_rewatch = (
+            rewatch.text == "Yes"
+            if (rewatch := self._entry.find("letterboxd:rewatch"))  # type: ignore
+            else None
+        )
+
+        return self
+
+    def _parse_review(self) -> None:
+        review = BeautifulSoup(
+            self._entry.find("description").text,  # type: ignore
+            features="html.parser",
+        )
+        self.poster_url = None
+        self.has_spoilers = False
+
+        first_p = review.find("p")
+        if first_p:
+            img = first_p.find("img")
+            if img:
+                self.poster_url = img["src"]  # type: ignore
+                first_p.decompose()  # type: ignore
+
+        first_p = review.find("p")
+        if (
+            first_p
+            and first_p.find("em")
+            and first_p.text.startswith("This review may contain spoilers.")
+        ):
+            self.has_spoilers = True
+            first_p.decompose()  # type: ignore
+
+        last_p = review.find_all("p")[-1]
+        if last_p and last_p.text.startswith("Watched on"):
+            last_p.decompose()
+
+        self._unformatted_review = BeautifulSoup(
+            str(review).strip(), features="html.parser"
+        )
+
+    async def _get_is_liked(self) -> None:
+        async with aiohttp.ClientSession() as session:
+            response = await _make_request(session, self.link)
+
+        if response:
+            log = BeautifulSoup(response, features="html.parser")
+            self.is_liked = bool(log.find("span", {"class": "icon-liked"}))
+        else:
+            self.is_liked = False
+
+    @staticmethod
+    def _format_review(review: BeautifulSoup, has_spoilers: bool) -> str | None:
+        for blockquote in review.find_all("blockquote"):
+            for p in blockquote.find_all("p"):
+                p.insert_before("\u00a0" * 8)
+
+            for br in blockquote.find_all("br"):
+                br.insert_before("\n" + "\u00a0" * 8)
+                br.unwrap()
+            blockquote.unwrap()
+
+        for br in review.find_all("br"):
+            br.replace_with("\n")
+
+        for p in review.find_all("p")[:-1]:
+            p.append("\n\n")
+            p.unwrap()
+
+        if has_spoilers:
+            return f"<b><i>\u00a0\nЦе ревʼю містить спойлери.\n</i></b>\n{review}"
+
+        return formatted_review if (formatted_review := str(review)) else None
 
 
-async def _fetch_all(users):
-    urls = [f"https://letterboxd.com/{username}/rss" for username in users]
-    connector = aiohttp.TCPConnector(limit=25)
-    responses = []
+class ListLog:
+    """
+    Attributes
+    ----------
+    link : str
+    title: str
+    size: int | None
+    """
 
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [_make_request(session, url) for url in urls]
-        responses = await asyncio.gather(*tasks)
+    _LIST_SIZE = re.compile(r"^A list of (\d+)")
 
-    return responses
+    def __init__(self, entry: PageElement) -> None:
+        self._entry = entry
+
+    def __await__(self):
+        return self._parse_metadata().__await__()
+
+    async def format(self) -> str:
+        size = f" ({self._decline_size(self.size)})" if self.size else ""
+        return f'🆕 🎬 <a href="{self.link}"><i>{self.title}</i>{size}</a>'
+
+    async def _parse_metadata(self) -> Self:
+        self.link = self._entry.find("link").text  # type: ignore
+        self.title = self._entry.find("title").text  # type: ignore
+        await self._get_list_size()
+
+        return self
+
+    async def _get_list_size(self) -> None:
+        async with aiohttp.ClientSession() as session:
+            response = await _make_request(session, self.link)
+
+            if response:
+                log = BeautifulSoup(response, features="html.parser")
+                desc = log.find("meta", {"name": "description"})["content"]  # type: ignore
+                if desc and (match := re.match(self._LIST_SIZE, desc)):  # type: ignore
+                    self.size = int(match[1])
+            else:
+                self.size = None
+
+    @staticmethod
+    def _decline_size(size: int) -> str:
+        last_digit = size % 10
+        last_two_digits = size % 100
+
+        if last_digit == 1 and last_two_digits != 11:
+            return f"{size} фільм"
+        elif 2 <= last_digit <= 4 and not (11 <= last_two_digits <= 14):
+            return f"{size} фільми"
+        else:
+            return f"{size} фільмів"
 
 
-# def letterboxd_to_link(url):
-#     letterboxd_response = requests.get(url)
+class UserFeed(list[MovieLog | ListLog]):
+    """
+    Attributes
+    ----------
+    user_link : str
+    name : str
+    cutoff_time : datetime | None
+    """
 
-#     if letterboxd_response.status_code == 200:
-#         video_source = r"https://vidsrc.cc/v2/embed/movie/"
-#         link = (
-#             video_source
-#             + (
-#                 BeautifulSoup(letterboxd_response.text, features="html.parser")
-#                 .find("p", {"class": "text-link text-footer"})
-#                 .find_all("a")[1]["href"]
-#                 .split("/")[-2]
-#             )
-#         )
+    _USER_LINK = re.compile(r"(https:\/\/letterboxd\.com\/[^\/]+\/)")
 
-#         vidsrc_response = requests.get(
-#             link,
-#             headers={"User-Agent": UserAgent().random},
-#         )
+    def __init__(
+        self,
+        entries: list[MovieLog | ListLog],
+        user_link: str,
+        name: str,
+        cutoff_time: datetime | None,
+    ) -> None:
+        super().__init__(entries)
+        self.name = name
+        self.user_link = user_link
+        if cutoff_time:
+            self.cutoff_time = cutoff_time
 
-#         if vidsrc_response.status_code == 200:
-#             soup = BeautifulSoup(vidsrc_response.text, features="html.parser")
-#             if soup.find("div", {"class": "not-found"}):
-#                 raise ValueError
+    async def format(self) -> str:
+        prefix = f'<b>Оновлення від <a href="{self.user_link}">{self.name}</a>:</b>'
 
-#             return link
+        tasks = [entry.format() for entry in self]
+        formatted_entries = await asyncio.gather(*tasks)
 
-#     return None
+        return "\n".join([prefix, *formatted_entries])
 
 
-def letterboxd_to_link(url):
+class RssUpdatesManager:
+    """
+    Attributes
+    ----------
+    cutoff_time : datetime
+    """
+
+    def __init__(self, max_age_minutes: int):
+        self.cutoff_time = datetime.now().astimezone() - timedelta(
+            minutes=max_age_minutes
+        )
+
+    async def fetch_updates_from_users(self, usernames: list[str]) -> list[UserFeed]:
+        shuffle(usernames)
+        urls = [f"https://letterboxd.com/{username}/rss" for username in usernames]
+        responses: list = await _fetch_all(urls)
+
+        return await self._create_user_feeds(list(filter(bool, responses)))
+
+    @staticmethod
+    async def format_updates(user_feeds: list[UserFeed]) -> str:
+        tasks = [user_feed.format() for user_feed in user_feeds if user_feed]
+        formatted_users = await asyncio.gather(*tasks)
+        return "\n\n".join(formatted_users)
+
+    async def _create_user_feeds(self, responses: list):
+        user_feeds = []
+
+        for rss in responses:
+            xml = BeautifulSoup(rss, features="xml")
+
+            user_link = xml.find("link").text  # type: ignore
+            name = xml.find("title").text.removeprefix("Letterboxd - ")  # type: ignore
+
+            all_entries = xml.find_all("item")
+            new_entries = list(
+                filter(
+                    lambda entry: self._is_entry_new(entry, self.cutoff_time),
+                    all_entries,
+                )
+            )
+
+            if new_entries:
+                user_feed = UserFeed([], user_link, name, self.cutoff_time)
+
+                for entry in new_entries:
+                    if "w" in entry.guid.text:
+                        user_feed.append(MovieLog(entry))
+                    else:
+                        user_feed.append(ListLog(entry))
+                user_feed[:] = await asyncio.gather(*user_feed)
+
+                user_feeds.append(user_feed)
+
+        return user_feeds
+
+    @staticmethod
+    def _is_entry_new(entry: PageElement, cutoff_time: datetime) -> bool:
+        # Example timestamp: "Thu, 19 Sep 2024 10:32:31 +1200"
+        entry_timestamp = entry.find("pubDate").text  # type: ignore
+        timestamp = datetime.strptime(entry_timestamp, "%a, %d %b %Y %H:%M:%S %z")
+        return timestamp > cutoff_time
+
+
+async def create_memes(feeds: list[UserFeed]):
+    originating_feeds = []
+    creators = []
+    poster_urls = []
+
+    if feeds:
+        for feed in feeds:
+            for entry in feed:
+                if isinstance(entry, MovieLog) and entry.rating and entry.poster_url:
+                    match entry.rating:
+                        case "5.0":
+                            creators.append(memes.create_high_rating_meme)
+                        case "0.5" | "1.0":
+                            creators.append(memes.create_low_rating_meme)
+                        case _:
+                            continue
+                    originating_feeds.append(feed)
+                    poster_urls.append(entry.poster_url)
+        posters = await _fetch_all(poster_urls)
+
+    pictures = []
+    for feed, creator, poster in zip(originating_feeds, creators, posters):
+        pictures.append(creator(feed.name, io.BytesIO(poster)))
+
+    return pictures
+
+
+def letterboxd_to_link(url: str) -> str | None:
     letterboxd_or_boxd = requests.get(url)
     if letterboxd_or_boxd.status_code == 200:
-        movie_or_log = re.compile(r"(https\:\/\/letterboxd\.com\/).*(film\/.+\/?)")
-        url = BeautifulSoup(letterboxd_or_boxd.text, features="html.parser").find(
-            "meta", property="og:url"
-        )["content"]
+        url = BeautifulSoup(
+            letterboxd_or_boxd.text,
+            features="html.parser",
+        ).find("meta", property="og:url")["content"]  # type: ignore
 
-        if match := re.search(movie_or_log, url):
+        if match := re.search(_MOVIE_OR_LOG, url):  # type: ignore
             movie_response = requests.get(f"{match[1]}{match[2]}")
             return (
                 r"https://vidsrc.cc/v2/embed/movie/"
                 + (
                     BeautifulSoup(movie_response.text, features="html.parser")
                     .find("p", {"class": "text-link text-footer"})
-                    .find_all("a")[1]["href"]
+                    .find_all("a")[1]["href"]  # type: ignore
                     .split("/")[-2]
                 )
             )
 
 
-def _get_liked_state(movie_link):
-    log = BeautifulSoup(requests.get(movie_link).text, features="html.parser")
-    return bool(log.find("span", {"class": "icon-liked"}))
+async def _make_request(session: aiohttp.ClientSession, url):
+    try:
+        async with session.get(url) as response:
+            if response.status != 200:
+                print(response.status, url)
+            else:
+                return await response.read()
+    except Exception as e:
+        print(e)
 
 
-def _get_review_and_metadata(entry):
-    review = BeautifulSoup(entry.find("description").text, features="html.parser")
-    img = None
-    has_spoilers = False
+async def _fetch_all(urls: list[str]) -> list:
+    responses = []
 
-    first_p = review.find("p")
-    if first_p:
-        img = first_p.find("img")
-        if img:
-            img = img["src"]
-            first_p.decompose()
+    async with aiohttp.ClientSession() as session:
+        tasks = [_make_request(session, url) for url in urls]
+        responses = await asyncio.gather(*tasks)
 
-    first_p = review.find("p")
-    if (
-        first_p
-        and first_p.find("em")
-        and first_p.text.startswith("This review may contain spoilers.")
-    ):
-        first_p.decompose()
-        has_spoilers = True
-
-    last_p = review.find_all("p")[-1]
-    if last_p and last_p.text.startswith("Watched on"):
-        last_p.decompose()
-
-    return BeautifulSoup(str(review).strip(), features="html.parser"), img, has_spoilers
-
-
-def _format_review(entry):
-    review, img, has_spoilers = _get_review_and_metadata(entry)
-
-    for blockquote in review.find_all("blockquote"):
-        for p in blockquote.find_all("p"):
-            p.insert_before("\u00a0" * 8)
-
-        for br in blockquote.find_all("br"):
-            br.insert_before("\n" + "\u00a0" * 8)
-            br.unwrap()
-        blockquote.unwrap()
-
-    for br in review.find_all("br"):
-        br.replace_with("\n")
-
-    for p in review.find_all("p")[:-1]:
-        p.append("\n\n")
-        p.unwrap()
-
-    if has_spoilers:
-        return f"<b><i>\u00a0\nЦе ревʼю містить спойлери.\n</i></b>\n{review}"
-    return review if str(review) else ""
-
-
-def _format_movie(entry):
-    movie = entry.find("letterboxd:filmTitle").text.rstrip()
-
-    year = entry.find("letterboxd:filmYear")
-    year = f" ({year.text})" if year else ""
-
-    rating = entry.find("letterboxd:memberRating")
-    stars = RATING_TO_STARS[rating.text] if rating else ""
-
-    emoji = '<tg-emoji emoji-id="{}">{}</tg-emoji>'.format(
-        *RATING_TO_EMOJI[rating.text if rating else ""]
-    )
-
-    if review := _format_review(entry):
-        review = f"\n<blockquote expandable>{review}<blockquote expandable/>"
-
-    link = entry.find("link").text
-    heart = "❤️" if _get_liked_state(link) else ""
-    prefix = " ".join([heart, emoji, stars]) if stars else emoji
-
-    # tmdb_id = entry.find("tmdb:movieId") or entry.find("tmdb:tvId")
-    # link = f"https://letterboxd.com/tmdb/{tmdb_id.text}"
-
-    return f'{prefix} <a href="{link}"><i>{movie}{year}</i></a>{review}'
-
-
-def _format_user(entries):
-    link = entries[0].find("link").text.split("/film/")[0]
-    name = entries[0].find("dc:creator").text
-
-    text = [f'<b>Оновлення від <a href="{link}">{name}</a>:</b>']
-
-    text.extend(_format_movie(entry) for entry in entries)
-    return "\n".join(text)
-
-
-def _is_entry_new(entry_time_str, cutoff_time):
-    # Example timestamp: "Thu, 19 Sep 2024 10:32:31 +1200"
-    timestamp = datetime.strptime(entry_time_str, "%a, %d %b %Y %H:%M:%S %z")
-    return timestamp > cutoff_time
-
-
-def _filter_new_movies(rss, cutoff_time):
-    entries = BeautifulSoup(rss, features="xml").find_all("item")
-    movies = [e for e in entries if "w" in e.guid.text] if len(entries) > 0 else []
-    return [
-        movie
-        for movie in movies
-        if _is_entry_new(movie.find("pubDate").text, cutoff_time)
-    ]
-
-
-async def fetch_movie_updates(users, cutoff_time):
-    shuffle(users)
-    responses = await _fetch_all(users)
-    message = []
-
-    for user in responses:
-        if updates := _filter_new_movies(user, cutoff_time):
-            message.append(_format_user(updates))
-
-    return "\n\n".join(message)
+    return responses
