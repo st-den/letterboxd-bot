@@ -3,7 +3,6 @@ import io
 import re
 from datetime import datetime, timedelta
 from random import shuffle
-from typing import Self
 
 import aiohttp
 import requests
@@ -65,8 +64,8 @@ class MovieLog:
         self._parse_metadata()
         self._parse_review()
 
-    def __await__(self):
-        return self._get_advanced_metadata().__await__()
+    async def get_advanced_metadata(self, session: aiohttp.ClientSession) -> None:
+        await self._get_is_liked(session)
 
     def format(self) -> str:
         year = f" ({self.year})" if self.year else ""
@@ -143,13 +142,8 @@ class MovieLog:
             str(review).strip(), features="html.parser"
         )
 
-    async def _get_advanced_metadata(self) -> Self:
-        await self._get_is_liked()
-        return self
-
-    async def _get_is_liked(self) -> None:
-        async with aiohttp.ClientSession() as session:
-            response = await _make_request(session, self.link)
+    async def _get_is_liked(self, session: aiohttp.ClientSession) -> None:
+        response = await _make_request(session, self.link)
 
         if response:
             log = BeautifulSoup(response, features="html.parser")
@@ -196,8 +190,8 @@ class ListLog:
         self._entry = entry
         self._parse_metadata()
 
-    def __await__(self):
-        return self._get_advanced_metadata().__await__()
+    async def get_advanced_metadata(self, session: aiohttp.ClientSession) -> None:
+        await self._get_list_size(session)
 
     def format(self) -> str:
         size = f" ({self._decline_size(self.size)})" if self.size else ""
@@ -207,21 +201,16 @@ class ListLog:
         self.link = self._entry.find("link").text  # type: ignore
         self.title = self._entry.find("title").text  # type: ignore
 
-    async def _get_advanced_metadata(self) -> Self:
-        await self._get_list_size()
-        return self
+    async def _get_list_size(self, session: aiohttp.ClientSession) -> None:
+        response = await _make_request(session, self.link)
 
-    async def _get_list_size(self) -> None:
-        async with aiohttp.ClientSession() as session:
-            response = await _make_request(session, self.link)
-
-            if response:
-                log = BeautifulSoup(response, features="html.parser")
-                desc = log.find("meta", {"name": "description"})["content"]  # type: ignore
-                if desc and (match := re.match(self._LIST_SIZE, desc)):  # type: ignore
-                    self.size = int(match[1])
-            else:
-                self.size = None
+        if response:
+            log = BeautifulSoup(response, features="html.parser")
+            desc = log.find("meta", {"name": "description"})["content"]  # type: ignore
+            if desc and (match := re.match(self._LIST_SIZE, desc)):  # type: ignore
+                self.size = int(match[1])
+        else:
+            self.size = None
 
     @staticmethod
     def _decline_size(size: int) -> str:
@@ -295,7 +284,7 @@ class RssUpdatesManager:
         curr_message_len = 0
 
         for user_feed in user_feeds:
-            text_len = len(BeautifulSoup(user_feed, features="html.parser").get_text())
+            text_len = len(user_feed)
 
             if text_len > chunk_len:
                 continue
@@ -338,7 +327,10 @@ class RssUpdatesManager:
                         user_feed.append(MovieLog(entry))
                     else:
                         user_feed.append(ListLog(entry))
-                user_feed[:] = await asyncio.gather(*user_feed)
+
+                async with aiohttp.ClientSession() as session:
+                    tasks = [log.get_advanced_metadata(session) for log in user_feed]
+                    await asyncio.gather(*tasks)
 
                 user_feeds.append(user_feed)
 

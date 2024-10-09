@@ -124,7 +124,7 @@ async def send_letterboxd_updates(
         return
 
     feeds = manager.format_feeds(updates)
-    messages = manager.chunk_feeds(feeds, 1024)
+    messages = manager.chunk_feeds(feeds, 2200)
 
     uploads = [
         client.upload_file(picture)
@@ -144,7 +144,7 @@ async def send_letterboxd_updates(
         else:
             remaining_messages.append(message)
 
-    for message in manager.chunk_feeds(remaining_messages, 2048):
+    for message in manager.chunk_feeds(remaining_messages, 4000):
         await client.send_message(destination, message, link_preview=False)
 
 
