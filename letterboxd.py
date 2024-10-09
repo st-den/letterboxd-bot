@@ -241,13 +241,10 @@ class UserFeed(list[MovieLog | ListLog]):
         entries: list[MovieLog | ListLog],
         user_link: str,
         name: str,
-        cutoff_time: datetime | None,
     ) -> None:
         super().__init__(entries)
         self.name = name
         self.user_link = user_link
-        if cutoff_time:
-            self.cutoff_time = cutoff_time
 
     def format(self) -> str:
         prefix = f'<b>Оновлення від <a href="{self.user_link}">{self.name}</a>:</b>'
@@ -262,9 +259,7 @@ class RssUpdatesManager:
     """
 
     def __init__(self, max_age_minutes: int):
-        self.cutoff_time = datetime.now().astimezone() - timedelta(
-            minutes=max_age_minutes
-        )
+        self.age = max_age_minutes
 
     async def fetch_updates_from_users(self, usernames: list[str]) -> list[UserFeed]:
         shuffle(usernames)
@@ -304,6 +299,7 @@ class RssUpdatesManager:
 
     async def _create_user_feeds(self, responses: list):
         user_feeds = []
+        cutoff_time = datetime.now().astimezone() - timedelta(minutes=self.age)
 
         for rss in responses:
             xml = BeautifulSoup(rss, features="xml")
@@ -314,19 +310,18 @@ class RssUpdatesManager:
             all_entries = xml.find_all("item")
             new_entries = list(
                 filter(
-                    lambda entry: self._is_entry_new(entry, self.cutoff_time),
+                    lambda entry: self._is_entry_new(entry, cutoff_time),
                     all_entries,
                 )
             )
 
             if new_entries:
-                user_feed = UserFeed([], user_link, name, self.cutoff_time)
+                user_feed = UserFeed([], user_link, name)
 
                 for entry in new_entries:
-                    if "w" in entry.guid.text:
-                        user_feed.append(MovieLog(entry))
-                    else:
-                        user_feed.append(ListLog(entry))
+                    user_feed.append(
+                        MovieLog(entry) if "w" in entry.guid.text else ListLog(entry)
+                    )
 
                 async with aiohttp.ClientSession() as session:
                     tasks = [log.get_advanced_metadata(session) for log in user_feed]
