@@ -65,7 +65,13 @@ class MovieLog:
         self._parse_review()
 
     async def get_advanced_metadata(self, session: aiohttp.ClientSession) -> None:
-        await self._get_is_liked(session)
+        if response := await _make_request(session, self.link):
+            log = BeautifulSoup(response, features="html.parser")
+            self.is_liked = bool(log.find("span", {"class": "icon-liked"}))
+        else:
+            self.is_liked = False
+        # end = datetime.now()
+        # print(end - start)
 
     def format(self) -> str:
         year = f" ({self.year})" if self.year else ""
@@ -142,15 +148,6 @@ class MovieLog:
             str(review).strip(), features="html.parser"
         )
 
-    async def _get_is_liked(self, session: aiohttp.ClientSession) -> None:
-        response = await _make_request(session, self.link)
-
-        if response:
-            log = BeautifulSoup(response, features="html.parser")
-            self.is_liked = bool(log.find("span", {"class": "icon-liked"}))
-        else:
-            self.is_liked = False
-
     @staticmethod
     def _format_review(review: BeautifulSoup, has_spoilers: bool) -> str | None:
         for blockquote in review.find_all("blockquote"):
@@ -191,7 +188,13 @@ class ListLog:
         self._parse_metadata()
 
     async def get_advanced_metadata(self, session: aiohttp.ClientSession) -> None:
-        await self._get_list_size(session)
+        if response := await _make_request(session, self.link):
+            log = BeautifulSoup(response, features="html.parser")
+            desc = log.find("meta", {"name": "description"})["content"]  # type: ignore
+            if desc and (match := re.match(self._LIST_SIZE, desc)):  # type: ignore
+                self.size = int(match[1])
+        else:
+            self.size = None
 
     def format(self) -> str:
         size = f" ({self._decline_size(self.size)})" if self.size else ""
@@ -200,17 +203,6 @@ class ListLog:
     def _parse_metadata(self) -> None:
         self.link = self._entry.find("link").text  # type: ignore
         self.title = self._entry.find("title").text  # type: ignore
-
-    async def _get_list_size(self, session: aiohttp.ClientSession) -> None:
-        response = await _make_request(session, self.link)
-
-        if response:
-            log = BeautifulSoup(response, features="html.parser")
-            desc = log.find("meta", {"name": "description"})["content"]  # type: ignore
-            if desc and (match := re.match(self._LIST_SIZE, desc)):  # type: ignore
-                self.size = int(match[1])
-        else:
-            self.size = None
 
     @staticmethod
     def _decline_size(size: int) -> str:
@@ -390,10 +382,10 @@ def letterboxd_to_link(url: str) -> str | None:
 async def _make_request(session: aiohttp.ClientSession, url):
     try:
         async with session.get(url) as response:
-            if response.status != 200:
-                print(response.status, url)
-            else:
+            if response.status == 200:
                 return await response.read()
+            else:
+                print(response.status, url)
     except Exception as e:
         print(e)
 
