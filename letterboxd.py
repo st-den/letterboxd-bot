@@ -62,12 +62,13 @@ class MovieLog:
 
     def __init__(self, entry: PageElement) -> None:
         self._entry = entry
+        self._parse_metadata()
         self._parse_review()
 
     def __await__(self):
-        return self._parse_metadata().__await__()
+        return self._get_advanced_metadata().__await__()
 
-    async def format(self) -> str:
+    def format(self) -> str:
         year = f" ({self.year})" if self.year else ""
         rewatch = "🔄" if self.is_rewatch else ""
         heart = "❤️" if self.is_liked else ""
@@ -92,9 +93,8 @@ class MovieLog:
 
         return f'{prefix} <a href="{self.link}"><i>{self.title}{year}</i></a>{review}'
 
-    async def _parse_metadata(self) -> Self:
+    def _parse_metadata(self) -> None:
         self.link = self._entry.find("link").text  # type: ignore
-        await self._get_is_liked()
 
         self.title = self._entry.find("letterboxd:filmTitle").text  # type: ignore
         self.year = (
@@ -110,8 +110,6 @@ class MovieLog:
             if (rewatch := self._entry.find("letterboxd:rewatch"))  # type: ignore
             else None
         )
-
-        return self
 
     def _parse_review(self) -> None:
         review = BeautifulSoup(
@@ -144,6 +142,10 @@ class MovieLog:
         self._unformatted_review = BeautifulSoup(
             str(review).strip(), features="html.parser"
         )
+
+    async def _get_advanced_metadata(self) -> Self:
+        await self._get_is_liked()
+        return self
 
     async def _get_is_liked(self) -> None:
         async with aiohttp.ClientSession() as session:
@@ -192,19 +194,21 @@ class ListLog:
 
     def __init__(self, entry: PageElement) -> None:
         self._entry = entry
+        self._parse_metadata()
 
     def __await__(self):
-        return self._parse_metadata().__await__()
+        return self._get_advanced_metadata().__await__()
 
-    async def format(self) -> str:
+    def format(self) -> str:
         size = f" ({self._decline_size(self.size)})" if self.size else ""
         return f'🆕 🎬 <a href="{self.link}"><i>{self.title}</i>{size}</a>'
 
-    async def _parse_metadata(self) -> Self:
+    def _parse_metadata(self) -> None:
         self.link = self._entry.find("link").text  # type: ignore
         self.title = self._entry.find("title").text  # type: ignore
-        await self._get_list_size()
 
+    async def _get_advanced_metadata(self) -> Self:
+        await self._get_list_size()
         return self
 
     async def _get_list_size(self) -> None:
@@ -256,13 +260,9 @@ class UserFeed(list[MovieLog | ListLog]):
         if cutoff_time:
             self.cutoff_time = cutoff_time
 
-    async def format(self) -> str:
+    def format(self) -> str:
         prefix = f'<b>Оновлення від <a href="{self.user_link}">{self.name}</a>:</b>'
-
-        tasks = [entry.format() for entry in self]
-        formatted_entries = await asyncio.gather(*tasks)
-
-        return "\n".join([prefix, *formatted_entries])
+        return "\n".join([prefix, *[entry.format() for entry in self]])
 
 
 class RssUpdatesManager:
@@ -285,10 +285,33 @@ class RssUpdatesManager:
         return await self._create_user_feeds(list(filter(bool, responses)))
 
     @staticmethod
-    async def format_updates(user_feeds: list[UserFeed]) -> str:
-        tasks = [user_feed.format() for user_feed in user_feeds if user_feed]
-        formatted_users = await asyncio.gather(*tasks)
-        return "\n\n".join(formatted_users)
+    def format_feeds(user_feeds: list[UserFeed]) -> list[str]:
+        return [user_feed.format() for user_feed in user_feeds if user_feed]
+
+    @staticmethod
+    def chunk_feeds(user_feeds: list[str], chunk_len=0) -> list[str]:
+        messages = []
+        curr_message_parts = []
+        curr_message_len = 0
+
+        for user_feed in user_feeds:
+            text_len = len(BeautifulSoup(user_feed, features="html.parser").get_text())
+
+            if text_len > chunk_len:
+                continue
+
+            if curr_message_len + text_len <= chunk_len - 2:
+                curr_message_parts.append(user_feed)
+                curr_message_len += text_len
+            else:
+                messages.append("\n\n".join(curr_message_parts))
+                curr_message_parts = [user_feed]
+                curr_message_len = text_len
+
+        if curr_message_parts:
+            messages.append("\n\n".join(curr_message_parts))
+
+        return messages
 
     async def _create_user_feeds(self, responses: list):
         user_feeds = []

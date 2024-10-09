@@ -2,8 +2,10 @@ import asyncio
 import re
 from argparse import ArgumentParser
 from datetime import datetime
+from itertools import zip_longest
 
 from telethon import TelegramClient, events
+from telethon.hints import EntityLike
 
 # from telethon.tl.functions.messages import SendReactionRequest
 # from telethon.tl.types import ReactionEmoji
@@ -13,7 +15,7 @@ import letterboxd
 import settings
 from custom_html_parser import CustomHtmlParser
 
-LETTERBOXD_OR_BOXD = re.compile(
+_LETTERBOXD_OR_BOXD = re.compile(
     r"^(?:https?:\/\/)?(?:www\.)?(boxd\.it.*|letterboxd\.com.*)"
 )
 
@@ -42,6 +44,18 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+
+def time_logger(func):
+    async def wrapper(*args, **kwargs):
+        start_time = datetime.now()
+        result = await func(*args, **kwargs)
+        end_time = datetime.now()
+        print(f"{end_time.strftime('%H:%M:%S')} - {(end_time - start_time).seconds}s")
+        return result
+
+    return wrapper
+
+
 # @client.on(events.NewMessage(from_users=258692322))
 # async def like_user_messages(event):
 #     await event.client(
@@ -61,7 +75,7 @@ async def letterboxd_link_handler(event):  # sourcery skip: last-if-guard
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityUrl):
                 url = event.raw_text[entity.offset : entity.offset + entity.length]
-                if match := re.search(LETTERBOXD_OR_BOXD, url):
+                if match := re.search(_LETTERBOXD_OR_BOXD, url):
                     url = f"https://{match[1]}"
                     try:
                         if link := letterboxd.letterboxd_to_link(url):
@@ -100,45 +114,50 @@ async def ping_handler(event):
     event.reply("pong")
 
 
-async def main(
+@time_logger
+async def send_letterboxd_updates(
+    destination: EntityLike,
+    manager: letterboxd.RssUpdatesManager,
     users: list[str] = settings.users,
-    age_minutes: int = args.age,
-    debug: bool = args.debug,
-):
-    chat = PeerChannel(settings.chat_id)
-    bot = await client.get_me()
+) -> None:
+    if not (updates := await manager.fetch_updates_from_users(users)):
+        return
+
+    feeds = manager.format_feeds(updates)
+    messages = manager.chunk_feeds(feeds, 1024)
+
+    uploads = [
+        client.upload_file(picture)
+        for picture in await letterboxd.create_memes(updates)
+    ]
+    files = await asyncio.gather(*uploads)
+    file_chunks = [files[i : i + 10] for i in range(0, len(files), 10)]
+
+    remaining_messages = []
+    for message, file_chunk in zip_longest(messages, file_chunks):
+        if message and file_chunk:
+            await client.send_message(
+                destination, message, file=file_chunk, link_preview=False
+            )
+        elif file_chunk:
+            await client.send_file(destination, file_chunk)
+        else:
+            remaining_messages.append(message)
+
+    for message in manager.chunk_feeds(remaining_messages, 2048):
+        await client.send_message(destination, message, link_preview=False)
+
+
+async def main(age_minutes: int = args.age, debug: bool = args.debug):
+    destination = await client.get_me() if debug else PeerChannel(settings.chat_id)
+    manager = letterboxd.RssUpdatesManager(age_minutes)
 
     while True:
-        start_time = datetime.now()
-
-        manager = letterboxd.RssUpdatesManager(age_minutes)
-        updates = await manager.fetch_updates_from_users(users)
-
-        if updates:
-            uploads = [
-                client.upload_file(picture)
-                for picture in await letterboxd.create_memes(updates)
-            ]
-            if uploads:
-                await client.send_message(
-                    bot if debug else chat,
-                    await manager.format_updates(updates),
-                    file=await asyncio.gather(*uploads),
-                    link_preview=False,
-                )
-            else:
-                await client.send_message(
-                    bot if debug else chat,
-                    await manager.format_updates(updates),
-                    link_preview=False,
-                )
-
-        end_time = datetime.now()
-        print(f"{end_time.strftime('%H:%M:%S')} — {(end_time - start_time).seconds}s")
-
+        await send_letterboxd_updates(destination, manager)
         await asyncio.sleep(age_minutes * 60)
 
 
-with client:
-    current_task = client.loop.create_task(main())
-    client.run_until_disconnected()
+if __name__ == "__main__":
+    with client:
+        current_task = client.loop.create_task(main())
+        client.run_until_disconnected()

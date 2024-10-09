@@ -1,6 +1,7 @@
 import io
 import re
 from random import choice
+from string import punctuation
 
 from PIL import Image, ImageFont
 from pilmoji import Pilmoji
@@ -88,5 +89,6 @@ def create_low_rating_meme(name, poster):
 
 
 def _clean_name(name):
-    name = re.sub(r"(?<=\S)([^\w\s])", r" \1", name)
-    return re.sub(r"([^\w\s])(?=\S)", r"\1 ", name)
+    emojis = r"[^\w\s" + re.escape(punctuation) + "]"
+    name = re.sub(r"(?<=\S)" + f"({emojis})", r" \1", name)
+    return re.sub(f"({emojis})" + r"(?=\S)", r"\1 ", name)
