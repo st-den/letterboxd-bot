@@ -2,7 +2,6 @@ import asyncio
 import re
 from argparse import ArgumentParser
 from datetime import datetime
-from itertools import zip_longest
 
 from telethon import TelegramClient, events
 from telethon.hints import EntityLike
@@ -10,6 +9,7 @@ from telethon.hints import EntityLike
 # from telethon.tl.functions.messages import SendReactionRequest
 # from telethon.tl.types import ReactionEmoji
 from telethon.types import MessageEntityUrl, PeerChannel
+from telethon.utils import split_text
 
 import letterboxd
 import settings
@@ -111,7 +111,7 @@ async def age_handler(event):
 
 @client.on(events.NewMessage(pattern=r"^ping$"))
 async def ping_handler(event):
-    event.reply("pong")
+    await event.reply("pong")
 
 
 @time_logger
@@ -124,28 +124,26 @@ async def send_letterboxd_updates(
         return
 
     feeds = manager.format_feeds(updates)
-    messages = manager.chunk_feeds(feeds, 2200)
 
     uploads = [
         client.upload_file(picture)
         for picture in await letterboxd.create_memes(updates)
     ]
     files = await asyncio.gather(*uploads)
-    file_chunks = [files[i : i + 10] for i in range(0, len(files), 10)]
 
-    remaining_messages = []
-    for message, file_chunk in zip_longest(messages, file_chunks):
-        if message and file_chunk:
-            await client.send_message(
-                destination, message, file=file_chunk, link_preview=False
-            )
-        elif file_chunk:
-            await client.send_file(destination, file_chunk)
-        else:
-            remaining_messages.append(message)
+    text, entities = CustomHtmlParser.parse(feeds)
+    messages = split_text(text, entities, split_at=(r"\n\n", r"\n"))
 
-    for message in manager.chunk_feeds(remaining_messages, 4000):
-        await client.send_message(destination, message, link_preview=False)
+    if files:
+        await client.send_file(destination, files)
+
+    for message, entities in messages:
+        await client.send_message(
+            destination,
+            message,
+            formatting_entities=entities,
+            link_preview=False,
+        )
 
 
 async def main(age_minutes: int = args.age, debug: bool = args.debug):

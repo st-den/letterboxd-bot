@@ -70,8 +70,6 @@ class MovieLog:
             self.is_liked = bool(log.find("span", {"class": "icon-liked"}))
         else:
             self.is_liked = False
-        # end = datetime.now()
-        # print(end - start)
 
     def format(self) -> str:
         year = f" ({self.year})" if self.year else ""
@@ -261,33 +259,10 @@ class RssUpdatesManager:
         return await self._create_user_feeds(list(filter(bool, responses)))
 
     @staticmethod
-    def format_feeds(user_feeds: list[UserFeed]) -> list[str]:
-        return [user_feed.format() for user_feed in user_feeds if user_feed]
-
-    @staticmethod
-    def chunk_feeds(user_feeds: list[str], chunk_len=0) -> list[str]:
-        messages = []
-        curr_message_parts = []
-        curr_message_len = 0
-
-        for user_feed in user_feeds:
-            text_len = len(user_feed)
-
-            if text_len > chunk_len:
-                continue
-
-            if curr_message_len + text_len <= chunk_len - 2:
-                curr_message_parts.append(user_feed)
-                curr_message_len += text_len
-            else:
-                messages.append("\n\n".join(curr_message_parts))
-                curr_message_parts = [user_feed]
-                curr_message_len = text_len
-
-        if curr_message_parts:
-            messages.append("\n\n".join(curr_message_parts))
-
-        return messages
+    def format_feeds(user_feeds: list[UserFeed]) -> str:
+        return "\n\n".join(
+            [user_feed.format() for user_feed in user_feeds if user_feed]
+        )
 
     async def _create_user_feeds(self, responses: list):
         user_feeds = []
